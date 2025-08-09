@@ -81,8 +81,6 @@ class _SettingsPageState extends State<SettingsPage> {
         },
       },
       {'label': '내 계정'},
-      {'label': '한/영 버전'},
-      {'label': '브라이트/다크 모드', 'onTap': _toggleDarkMode},
     ];
 
     return Scaffold(

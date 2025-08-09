@@ -1,3 +1,4 @@
+// year_page.dart
 import 'package:flutter/material.dart';
 
 class YearCalendarPage extends StatefulWidget {
@@ -8,9 +9,16 @@ class YearCalendarPage extends StatefulWidget {
 }
 
 class _YearCalendarPageState extends State<YearCalendarPage> {
-  int selectedYear = DateTime.now().year;
+  late int selectedYear;
+  late final List<int> selectableYears;
 
-  final List<int> selectableYears = [2023, 2024, 2025];
+  @override
+  void initState() {
+    super.initState();
+    final int currentYear = DateTime.now().year;
+    selectableYears = List.generate(3, (i) => currentYear - 1 + i); 
+    selectedYear = DateTime.now().year; 
+  }
 
   @override
   Widget build(BuildContext context) {

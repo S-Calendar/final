@@ -14,22 +14,40 @@ class MainPage extends StatefulWidget {
 
 class _MainPageState extends State<MainPage> {
   final int baseYear = 2024;
-  late final PageController _pageController;
+  late PageController _pageController;
   late int _selectedIndex;
   late int _todayIndex;
   late List<Notice> allNotices = [];
+  bool _initializedWithArgs = false;
 
   List<String> selectedCategories = ['ai학과공지', '학사공지', '취업공지'];
 
   @override
-  void initState() {
-    super.initState();
-    final DateTime today = DateTime.now();
-    _todayIndex = (today.year - baseYear) * 12 + (today.month - 1);
-    _selectedIndex = _todayIndex;
-    _pageController = PageController(initialPage: _todayIndex);
+  void didChangeDependencies() {
+    super.didChangeDependencies();
 
-    _loadNotices();
+    final args = ModalRoute.of(context)?.settings.arguments as Map<String, int>?;
+
+    final today = DateTime.now();
+    int initYear = today.year;
+    int initMonth = today.month;
+
+    if (args != null) {
+      if (args.containsKey('year') && args.containsKey('month')) {
+        initYear = args['year']!;
+        initMonth = args['month']!;
+      }
+    }
+
+    _todayIndex = (today.year - baseYear) * 12 + (today.month - 1);
+    final newIndex = (initYear - baseYear) * 12 + (initMonth - 1);
+
+    if (!_initializedWithArgs || _selectedIndex != newIndex) {
+      _selectedIndex = newIndex;
+      _pageController = PageController(initialPage: _selectedIndex);
+      _initializedWithArgs = true;
+      _loadNotices();
+    }
   }
 
   Future<void> _loadNotices() async {
@@ -47,15 +65,14 @@ class _MainPageState extends State<MainPage> {
   void _showCategoryDialog() {
     showDialog(
       context: context,
-      builder:
-          (context) => CategoryFilterDialog(
-            selectedCategories: selectedCategories,
-            onApply: (newCategories) {
-              setState(() {
-                selectedCategories = newCategories;
-              });
-            },
-          ),
+      builder: (context) => CategoryFilterDialog(
+        selectedCategories: selectedCategories,
+        onApply: (newCategories) {
+          setState(() {
+            selectedCategories = newCategories;
+          });
+        },
+      ),
     );
   }
 
@@ -102,7 +119,7 @@ class _MainPageState extends State<MainPage> {
                   ),
                   const SizedBox(width: 4),
                   GestureDetector(
-                    onTap: _showCategoryDialog, // 필터 팝업 열기
+                    onTap: _showCategoryDialog,
                     child: Image.asset(
                       'assets/colorfilter_icon.png',
                       width: 44,
@@ -124,10 +141,9 @@ class _MainPageState extends State<MainPage> {
                   final month = (index % 12) + 1;
                   final currentMonth = DateTime(year, month);
 
-                  final filteredNotices =
-                      allNotices
-                          .where((n) => selectedCategories.contains(n.category))
-                          .toList();
+                  final filteredNotices = allNotices
+                      .where((n) => selectedCategories.contains(n.category))
+                      .toList();
 
                   return CustomCalendar(
                     month: currentMonth,

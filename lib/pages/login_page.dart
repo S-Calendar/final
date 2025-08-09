@@ -1,22 +1,39 @@
 // pages/login_page.dart
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
-import '../pages/main_page.dart'; // MainPage import
+import '../pages/main_page.dart';
 
-class LoginPage extends StatelessWidget {
+class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
 
-  void _onGoogleLoginPressed(BuildContext context) async {
-    final user = await AuthService().signInWithGoogle();
+  @override
+  State<LoginPage> createState() => _LoginPageState();
+}
+
+class _LoginPageState extends State<LoginPage> {
+  final AuthService _authService = AuthService();
+  bool _isSigningIn = false;
+
+  Future<void> _onGoogleLoginPressed() async {
+    if (_isSigningIn) return; // 중복 방지
+
+    setState(() {
+      _isSigningIn = true;
+    });
+
+    final user = await _authService.signInWithGoogle();
+
+    setState(() {
+      _isSigningIn = false;
+    });
+
     if (user != null) {
       print('로그인 성공: ${user.displayName}');
-      // 로그인 성공 시 MainPage로 이동
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (context) => const MainPage()),
       );
     } else {
-      // 로그인 실패 또는 취소
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('로그인에 실패했거나 취소되었습니다.')),
       );
@@ -52,7 +69,7 @@ class LoginPage extends StatelessWidget {
             ),
             const SizedBox(height: 40),
             ElevatedButton(
-              onPressed: () => _onGoogleLoginPressed(context),
+              onPressed: _isSigningIn ? null : _onGoogleLoginPressed,
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white,
                 foregroundColor: const Color(0xFF6A6FB3),
@@ -61,14 +78,20 @@ class LoginPage extends StatelessWidget {
                   borderRadius: BorderRadius.circular(8),
                 ),
               ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Image.asset('assets/google_logo.png', height: 24),
-                  const SizedBox(width: 10),
-                  const Text('Google로 로그인', style: TextStyle(fontSize: 16)),
-                ],
-              ),
+              child: _isSigningIn
+                  ? const SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Image.asset('assets/google_logo.png', height: 24),
+                        const SizedBox(width: 10),
+                        const Text('Google로 로그인', style: TextStyle(fontSize: 16)),
+                      ],
+                    ),
             ),
           ],
         ),
