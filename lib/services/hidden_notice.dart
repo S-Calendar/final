@@ -1,68 +1,38 @@
-// services/hidden_notices.dart
-import 'dart:convert';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../models/notice.dart';
 
 class HiddenNotices {
-  static final List<Notice> _hidden = [];
+  static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  /// 숨긴 공지 목록 (읽기 전용)
-  static List<Notice> get all => List.unmodifiable(_hidden);
+  static CollectionReference<Map<String, dynamic>> _userHiddenNotices(
+    String userUid,
+  ) => _firestore
+      .collection('userHiddenNotices')
+      .doc(userUid)
+      .collection('hiddenNotices');
 
-  /// SharedPreferences에서 숨긴 공지를 불러옴
-  static Future<void> loadHidden() async {
-    final prefs = await SharedPreferences.getInstance();
-    final data = prefs.getStringList('hidden_notices') ?? [];
-    _hidden.clear();
-    _hidden.addAll(
-      data.map((jsonStr) {
-        final map = json.decode(jsonStr);
-        return _noticeFromMap(map);
-      }),
-    );
+  static Future<List<Notice>> loadHidden(String userUid) async {
+    final snapshot = await _userHiddenNotices(userUid).get();
+    return snapshot.docs.map((doc) => _noticeFromMap(doc.data())).toList();
   }
 
-  static Future<void> _saveHidden() async {
-    final prefs = await SharedPreferences.getInstance();
-    final data = _hidden.map((n) => json.encode(_noticeToMap(n))).toList();
-    await prefs.setStringList('hidden_notices', data);
+  static Future<void> add(String userUid, Notice notice) async {
+    notice.isHidden = true;
+    await _userHiddenNotices(userUid).doc(notice.id).set(_noticeToMap(notice));
   }
 
-  /// 공지를 숨김 목록에 추가
-  static Future<void> add(Notice notice) async {
-    if (!_hidden.any(
-      (n) => n.title == notice.title && n.startDate == notice.startDate,
-    )) {
-      notice.isHidden = true;
-      _hidden.add(notice);
-      await _saveHidden();
-    }
+  static Future<void> remove(String userUid, Notice notice) async {
+    await _userHiddenNotices(userUid).doc(notice.id).delete();
   }
 
-  /// 숨긴 공지에서 제거 (복원)
-  static Future<void> remove(Notice notice) async {
-    _hidden.removeWhere(
-      (n) => n.title == notice.title && n.startDate == notice.startDate,
-    );
-    await _saveHidden();
+  static Future<bool> contains(String userUid, String noticeId) async {
+    final doc = await _userHiddenNotices(userUid).doc(noticeId).get();
+    return doc.exists;
   }
 
-  /// *일단유지*숨긴 공지를 복원 (isHidden false + 리스트에서 제거)
-  static Future<void> unhide(Notice notice) async {
-    notice.isHidden = false;
-    await remove(notice);
-  }
-
-  /// 숨긴 공지에 포함되어 있는지 확인
-  static bool contains(Notice notice) {
-    return _hidden.any(
-      (n) => n.title == notice.title && n.startDate == notice.startDate,
-    );
-  }
-
-  /// Notice → Map
   static Map<String, dynamic> _noticeToMap(Notice n) => {
+    'id': n.id,
     'title': n.title,
     'startDate': n.startDate.toIso8601String(),
     'endDate': n.endDate.toIso8601String(),
@@ -74,7 +44,8 @@ class HiddenNotices {
   };
 
   static Notice _noticeFromMap(Map<String, dynamic> m) => Notice(
-    title: m['title'],
+    id: m['id'] ?? '',
+    title: m['title'] ?? '',
     startDate: DateTime.parse(m['startDate']),
     endDate: DateTime.parse(m['endDate']),
     color: Color(m['color']),

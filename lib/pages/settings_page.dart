@@ -4,6 +4,9 @@ import 'hidden_items_page.dart';
 import 'favorite_items_page.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'push_page.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:google_sign_in/google_sign_in.dart';
+import 'login_page.dart'; // 로그인 페이지 import
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -35,7 +38,7 @@ class _SettingsPageState extends State<SettingsPage> {
     const init = InitializationSettings(android: android);
     await _notificationsPlugin.initialize(init);
   }
-  
+
   @override
   Widget build(BuildContext context) {
     final List<Map<String, dynamic>> settingsItems = [
@@ -80,7 +83,48 @@ class _SettingsPageState extends State<SettingsPage> {
           );
         },
       },
-      {'label': '내 계정'},
+      {
+        'label': '로그아웃',
+        'onTap': () async {
+          final shouldLogout = await showDialog<bool>(
+            context: context,
+            builder: (context) {
+              return AlertDialog(
+                title: const Text('로그아웃 확인'),
+                content: const Text('정말 로그아웃 하시겠습니까?'),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('아니오'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    child: const Text('예'),
+                  ),
+                ],
+              );
+            },
+          );
+
+          // '예'를 누른 경우만 로그아웃 진행
+          if (shouldLogout == true) {
+            try {
+              await GoogleSignIn().signOut();
+              await FirebaseAuth.instance.signOut();
+            } catch (e) {
+              debugPrint('로그아웃 중 오류: $e');
+            }
+
+            if (!mounted) return;
+
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(builder: (context) => const LoginPage()),
+              (route) => false,
+            );
+          }
+        },
+      },
     ];
 
     return Scaffold(

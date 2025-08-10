@@ -20,64 +20,100 @@ class PushItem {
 
 class PushRepository {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  static CollectionReference<Map<String, dynamic>> get _ref =>
+
+  // 공지 원본 데이터 컬렉션
+  static CollectionReference<Map<String, dynamic>> get _calendarEvents =>
       _firestore.collection('calendarEvents');
 
-  // isPush == true 만 조회
-  static Future<List<PushItem>> loadPushItems() async {
-    final snapshot = await _ref.where('isPush', isEqualTo: true).get();
+  // 사용자별 푸시 설정 컬렉션
+  static CollectionReference<Map<String, dynamic>> _userPushes(
+    String userUid,
+  ) => _firestore.collection('userPushes').doc(userUid).collection('pushes');
 
-    return snapshot.docs.map((doc) {
+  // 사용자별 푸시 아이템 전체 조회
+  static Future<List<PushItem>> loadPushItems(String userUid) async {
+    final snapshot = await _userPushes(userUid).get();
+
+    List<PushItem> results = [];
+
+    for (var doc in snapshot.docs) {
       final data = doc.data();
-      data['id'] = doc.id;
-      final notice = Notice.fromJson(data);
 
-      final scheduledAt = (data['pushScheduledAt'] as Timestamp?)?.toDate();
-      final createdAt = (data['pushCreatedAt'] as Timestamp?)?.toDate();
-      final enabled = (data['isPush'] ?? false) == true;
-      final nid = (data['notificationId'] ?? notice.hashCode) as int;
+      // enabled 가 true 인 것만 처리
+      final enabled = (data['enabled'] ?? false) == true;
+      if (!enabled) continue; // false면 건너뛰기
 
-      return PushItem(
-        notice: notice,
-        scheduledAt: scheduledAt ?? DateTime.now(),
-        createdAt: createdAt ?? DateTime.now(),
-        enabled: enabled,
-        notificationId: nid,
+      final noticeId = data['noticeId'] as String?;
+      if (noticeId == null) continue;
+
+      final noticeDoc = await _calendarEvents.doc(noticeId).get();
+      if (!noticeDoc.exists) continue;
+      final noticeData = noticeDoc.data()!;
+      noticeData['id'] = noticeDoc.id;
+      final notice = Notice.fromJson(noticeData, id: noticeDoc.id);
+
+      final scheduledAt =
+          (data['pushScheduledAt'] as Timestamp?)?.toDate() ?? DateTime.now();
+      final createdAt =
+          (data['pushCreatedAt'] as Timestamp?)?.toDate() ?? DateTime.now();
+      final notificationId = (data['notificationId'] ?? notice.hashCode) as int;
+
+      results.add(
+        PushItem(
+          notice: notice,
+          scheduledAt: scheduledAt,
+          createdAt: createdAt,
+          enabled: enabled,
+          notificationId: notificationId,
+        ),
       );
-    }).toList();
+    }
+
+    return results;
   }
 
+  // 푸시 등록 또는 업데이트 (개인화)
   static Future<void> upsertPush({
+    required String userUid,
     required Notice notice,
     required DateTime scheduledAt,
     required int notificationId,
     bool enabled = true,
   }) async {
     final docId = _docId(notice);
-    await _ref.doc(docId).set({
-      ...notice.toJson(),
-      'isPush': enabled,
+    await _userPushes(userUid).doc(docId).set({
+      'noticeId': notice.id,
+      'enabled': enabled,
       'pushScheduledAt': Timestamp.fromDate(scheduledAt),
       'pushCreatedAt': FieldValue.serverTimestamp(),
       'notificationId': notificationId,
     }, SetOptions(merge: true));
   }
 
-  static Future<void> setEnabled(Notice notice, bool enabled) async {
+  // 푸시 활성화 상태 변경 (개인화)
+  static Future<void> setEnabled(
+    String userUid,
+    Notice notice,
+    bool enabled,
+  ) async {
     final docId = _docId(notice);
-    await _ref.doc(docId).set({'isPush': enabled}, SetOptions(merge: true));
+    await _userPushes(
+      userUid,
+    ).doc(docId).set({'enabled': enabled}, SetOptions(merge: true));
   }
 
-  static Future<void> removePush(Notice notice) async {
-    // 기록은 남기고 isPush만 내리는 방식(필요시 필드 삭제로 바꿔도 됨)
-    await setEnabled(notice, false);
+  // 푸시 제거 (비활성화, 개인화)
+  static Future<void> removePush(String userUid, Notice notice) async {
+    await setEnabled(userUid, notice, false);
   }
 
-  static Future<bool> isPushed(Notice notice) async {
-    final doc = await _ref.doc(_docId(notice)).get();
-    return (doc.data()?['isPush'] ?? false) == true;
+  // 푸시 활성화 여부 확인 (개인화)
+  static Future<bool> isPushed(String userUid, Notice notice) async {
+    final doc = await _userPushes(userUid).doc(_docId(notice)).get();
+    return (doc.data()?['enabled'] ?? false) == true;
   }
 
+  // 문서 ID 생성 (공지 식별용)
   static String _docId(Notice notice) {
     final safeTitle =
         notice.title.replaceAll(RegExp(r'[^\w]+'), '-').toLowerCase();

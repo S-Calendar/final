@@ -32,6 +32,7 @@ class NoticeData {
 
         all.add(
           Notice(
+            id: doc.id,
             title: data['title'] ?? '제목 없음',
             startDate: start,
             endDate: end,

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:intl/intl.dart';
 import 'package:timezone/timezone.dart' as tz;
@@ -6,10 +7,10 @@ import 'package:scalendar_app/models/notice.dart';
 import 'package:scalendar_app/services/gemini_service.dart';
 import 'package:scalendar_app/services/web_scraper_service.dart';
 import 'package:scalendar_app/services/hidden_notice.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/favorite_notice.dart';
 import '../services/push_repository.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class SummaryPage extends StatefulWidget {
   final Notice notice;
@@ -21,6 +22,7 @@ class SummaryPage extends StatefulWidget {
 
 class _SummaryPageState extends State<SummaryPage> {
   final WebScraperService _webScraperService = WebScraperService();
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final GeminiService _geminiService = GeminiService();
   final FlutterLocalNotificationsPlugin _notificationsPlugin =
       FlutterLocalNotificationsPlugin();
@@ -28,30 +30,34 @@ class _SummaryPageState extends State<SummaryPage> {
   bool _isLoading = true;
   Map<String, String>? _summaryResults;
   String? _errorMessage;
+
   bool _isFavorite = false;
+  String? _userUid;
 
   @override
   void initState() {
     super.initState();
+    _userUid = FirebaseAuth.instance.currentUser?.uid;
     _initializeNotification();
     _loadMemo();
     _summarizeFromInitialUrl();
     _loadFavoriteStatus();
   }
 
+  // ===== Notification Initialization =====
   Future<void> _initializeNotification() async {
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings = AndroidInitializationSettings(
+      '@mipmap/ic_launcher',
+    );
     const initSettings = InitializationSettings(android: androidSettings);
     await _notificationsPlugin.initialize(initSettings);
   }
 
-  // ===== Push scheduling helpers =====
   String _fmt(DateTime dt) => DateFormat('yyyy-MM-dd HH:mm').format(dt);
 
-  /// 시작일 하루 전 08:00로 예약. 과거면 null 반환.
-  /// (1일인 경우도 안전하게 처리; "유효치 못한 더미 날짜"를 가리기 위해 연도 검증도 추가)
+  // ===== Compute Schedule Time for Notification =====
   DateTime? _computeScheduleTime(DateTime startDate) {
-    if (startDate.year < 2000) return null; // 비정상/더미 날짜 방지용
+    if (startDate.year < 2000) return null;
     final schedule = DateTime(
       startDate.year,
       startDate.month,
@@ -64,7 +70,15 @@ class _SummaryPageState extends State<SummaryPage> {
     return schedule;
   }
 
+  // ===== Schedule Push Notification (with userUid) =====
   Future<void> _scheduleNotification(Notice notice) async {
+    if (_userUid == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('로그인이 필요합니다.')));
+      return;
+    }
+
     final scheduledDate = _computeScheduleTime(notice.startDate);
     if (scheduledDate == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -83,7 +97,7 @@ class _SummaryPageState extends State<SummaryPage> {
       ),
     );
 
-    final id = notice.hashCode; // 가능하면 Notice에 고정 정수 ID 필드 사용 권장
+    final id = notice.hashCode;
     await _notificationsPlugin.zonedSchedule(
       id,
       '다가오는 공지',
@@ -95,6 +109,7 @@ class _SummaryPageState extends State<SummaryPage> {
     );
 
     await PushRepository.upsertPush(
+      userUid: _userUid!, // 개인화 적용
       notice: notice,
       scheduledAt: scheduledDate,
       notificationId: id,
@@ -106,17 +121,34 @@ class _SummaryPageState extends State<SummaryPage> {
     );
   }
 
+  // ===== Cancel Push Notification (with userUid) =====
   Future<void> _cancelNotification(Notice notice) async {
+    if (_userUid == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('로그인이 필요합니다.')));
+      return;
+    }
+
     final id = notice.hashCode;
     await _notificationsPlugin.cancel(id);
-    await PushRepository.removePush(notice);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('알림이 취소되었습니다.')),
-    );
+
+    await PushRepository.removePush(_userUid!, widget.notice);
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('알림이 취소되었습니다.')));
   }
 
+  // ===== Toggle Push Notification On/Off =====
   Future<void> _toggleNotificationForNotice() async {
-    // 예약/취소 + 저장소 동기화
+    if (_userUid == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('로그인이 필요합니다.')));
+      return;
+    }
+
     if (widget.notice.isPush) {
       await _cancelNotification(widget.notice);
       if (!mounted) return;
@@ -124,28 +156,66 @@ class _SummaryPageState extends State<SummaryPage> {
     } else {
       await _scheduleNotification(widget.notice);
       if (!mounted) return;
-      final pushed = await PushRepository.isPushed(widget.notice);
+      final pushed = await PushRepository.isPushed(_userUid!, widget.notice);
       if (pushed) {
         setState(() => widget.notice.isPush = true);
       }
     }
   }
 
-  // ===== Memo (local) =====
+  // Firestore에서 메모 불러오기
+  Future<String?> _loadMemoFromFirestore(
+    String userUid,
+    String noticeId,
+  ) async {
+    try {
+      final doc =
+          await _firestore
+              .collection('userMemos')
+              .doc(userUid)
+              .collection('memos')
+              .doc(noticeId)
+              .get();
+      if (doc.exists) {
+        return doc.data()?['memo'] as String?;
+      }
+    } catch (e) {
+      print('Firestore 메모 불러오기 실패: $e');
+    }
+    return null;
+  }
+
+  // Firestore에 메모 저장하기
+  Future<void> _saveMemoToFirestore(
+    String userUid,
+    String noticeId,
+    String memo,
+  ) async {
+    try {
+      await _firestore
+          .collection('userMemos')
+          .doc(userUid)
+          .collection('memos')
+          .doc(noticeId)
+          .set({'memo': memo});
+    } catch (e) {
+      print('Firestore 메모 저장 실패: $e');
+    }
+  }
+
+  // ===== Memo Load/Save =====
   Future<void> _loadMemo() async {
-    final prefs = await SharedPreferences.getInstance();
-    final key = _generateMemoKey();
-    final savedMemo = prefs.getString(key);
+    if (_userUid == null) return;
+    final memo = await _loadMemoFromFirestore(_userUid!, widget.notice.id);
     if (!mounted) return;
     setState(() {
-      widget.notice.memo = savedMemo;
+      widget.notice.memo = memo ?? '';
     });
   }
 
   Future<void> _saveMemo(String memo) async {
-    final prefs = await SharedPreferences.getInstance();
-    final key = _generateMemoKey();
-    await prefs.setString(key, memo);
+    if (_userUid == null) return;
+    await _saveMemoToFirestore(_userUid!, widget.notice.id, memo);
     if (!mounted) return;
     setState(() {
       widget.notice.memo = memo;
@@ -153,14 +223,15 @@ class _SummaryPageState extends State<SummaryPage> {
   }
 
   String _generateMemoKey() {
-    return 'memo_${widget.notice.title}_${widget.notice.startDate.toIso8601String()}';
+    return 'memo_${_userUid ?? 'unknown'}_${widget.notice.title}_${widget.notice.startDate.toIso8601String()}';
   }
 
-  // ===== Summary generation =====
+  // ===== Summarize from Initial URL =====
   Future<void> _summarizeFromInitialUrl() async {
     try {
-      final content =
-          await _webScraperService.fetchAndExtractText(widget.notice.url ?? '');
+      final content = await _webScraperService.fetchAndExtractText(
+        widget.notice.url ?? '',
+      );
       if (content == null || content.isEmpty) {
         if (!mounted) return;
         setState(() {
@@ -203,79 +274,101 @@ class _SummaryPageState extends State<SummaryPage> {
       await launchUrl(url, mode: LaunchMode.externalApplication);
     } else {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text("링크를 열 수 없습니다.")));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("링크를 열 수 없습니다.")));
     }
   }
 
-  // ===== Memo dialog =====
+  // ===== Memo Edit Dialog =====
   void _showMemoDialog() {
-    final TextEditingController controller =
-        TextEditingController(text: widget.notice.memo);
+    final TextEditingController controller = TextEditingController(
+      text: widget.notice.memo,
+    );
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('메모 수정'),
-        content: TextField(
-          controller: controller,
-          maxLines: 3,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: '메모를 입력하세요'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('취소'),
+      builder:
+          (context) => AlertDialog(
+            title: const Text('메모 수정'),
+            content: TextField(
+              controller: controller,
+              maxLines: 3,
+              autofocus: true,
+              decoration: const InputDecoration(hintText: '메모를 입력하세요'),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('취소'),
+              ),
+              TextButton(
+                onPressed: () async {
+                  final memo = controller.text.trim();
+                  await _saveMemo(memo);
+                  if (!mounted) return;
+                  Navigator.pop(context);
+                },
+                child: const Text('저장'),
+              ),
+            ],
           ),
-          TextButton(
-            onPressed: () async {
-              final memo = controller.text.trim();
-              await _saveMemo(memo);
-              if (!mounted) return;
-              Navigator.pop(context);
-            },
-            child: const Text('저장'),
-          ),
-        ],
-      ),
     );
   }
 
   // ===== Hide notice =====
   void _hideNotice() async {
-    await HiddenNotices.add(widget.notice);
+    if (_userUid == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('로그인이 필요합니다.')));
+      return;
+    }
+    await HiddenNotices.add(_userUid!, widget.notice);
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('이 공지를 숨겼습니다.')));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('이 공지를 숨겼습니다.')));
     Navigator.pop(context);
   }
 
-  // ===== Favorites =====
+  // ===== Favorite Status Load =====
   Future<void> _loadFavoriteStatus() async {
-    final isFav = await FavoriteNotices.isFavorite(widget.notice);
+    final userUid = _userUid;
+    final noticeId = widget.notice.id;
+    if (userUid == null || noticeId == null) return;
+
+    final isFav = await FavoriteNotices.isFavorite(userUid, noticeId);
     if (!mounted) return;
     setState(() {
       _isFavorite = isFav;
     });
   }
 
+  // ===== Toggle Favorite =====
   Future<void> _toggleFavorite() async {
-    await FavoriteNotices.toggleFavorite(widget.notice);
-    final newStatus = await FavoriteNotices.isFavorite(widget.notice);
+    final userUid = _userUid;
+    final noticeId = widget.notice.id;
+    if (userUid == null || noticeId == null) return;
+
+    if (_isFavorite) {
+      await FavoriteNotices.removeFavorite(userUid, noticeId);
+    } else {
+      await FavoriteNotices.addFavorite(userUid, noticeId);
+    }
     if (!mounted) return;
     setState(() {
-      _isFavorite = newStatus;
+      _isFavorite = !_isFavorite;
     });
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(newStatus ? '관심 공지에 추가되었습니다.' : '관심 공지에서 제거되었습니다.'),
+        content: Text(_isFavorite ? '관심 공지에 추가되었습니다.' : '관심 공지에서 제거되었습니다.'),
         duration: const Duration(seconds: 1),
       ),
     );
   }
 
-  // ===== UI =====
+  // ===== Build UI =====
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -305,68 +398,69 @@ class _SummaryPageState extends State<SummaryPage> {
           ),
         ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _errorMessage != null
+      body:
+          _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : _errorMessage != null
               ? Center(child: Text(_errorMessage!))
               : SingleChildScrollView(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildNoticeHeader(),
-                      const SizedBox(height: 24),
-                      _buildSummaryItem('참가대상', _summaryResults!["참가대상"]),
-                      _buildSummaryItem('신청기간', _summaryResults!["신청기간"]),
-                      _buildSummaryItem('신청방법', _summaryResults!["신청방법"]),
-                      _buildSummaryItem('내용', _summaryResults!["내용"]),
-                      const SizedBox(height: 16),
-                      if (widget.notice.url != null)
-                        GestureDetector(
-                          onTap: _launchUrl,
-                          child: const Text(
-                            '홈페이지 바로가기',
-                            style: TextStyle(
-                              color: Colors.blue,
-                              fontSize: 14,
-                              decoration: TextDecoration.underline,
-                            ),
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildNoticeHeader(),
+                    const SizedBox(height: 24),
+                    _buildSummaryItem('참가대상', _summaryResults!["참가대상"]),
+                    _buildSummaryItem('신청기간', _summaryResults!["신청기간"]),
+                    _buildSummaryItem('신청방법', _summaryResults!["신청방법"]),
+                    _buildSummaryItem('내용', _summaryResults!["내용"]),
+                    const SizedBox(height: 16),
+                    if (widget.notice.url != null)
+                      GestureDetector(
+                        onTap: _launchUrl,
+                        child: const Text(
+                          '홈페이지 바로가기',
+                          style: TextStyle(
+                            color: Colors.blue,
+                            fontSize: 14,
+                            decoration: TextDecoration.underline,
                           ),
-                        ),
-                      const SizedBox(height: 12),
-                      const Divider(color: Colors.grey),
-                      const SizedBox(height: 12),
-                      const Text(
-                        '메모:',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
                         ),
                       ),
-                      if (widget.notice.memo != null &&
-                          widget.notice.memo!.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4.0),
-                          child: Text(widget.notice.memo!),
-                        ),
-                      const SizedBox(height: 60),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          ElevatedButton(
-                            onPressed: _showMemoDialog,
-                            child: const Text('수정'),
-                          ),
-                          const SizedBox(width: 40),
-                          ElevatedButton(
-                            onPressed: _hideNotice,
-                            child: const Text('숨기기'),
-                          ),
-                        ],
+                    const SizedBox(height: 12),
+                    const Divider(color: Colors.grey),
+                    const SizedBox(height: 12),
+                    const Text(
+                      '메모:',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
                       ),
-                    ],
-                  ),
+                    ),
+                    if (widget.notice.memo != null &&
+                        widget.notice.memo!.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4.0),
+                        child: Text(widget.notice.memo!),
+                      ),
+                    const SizedBox(height: 60),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        ElevatedButton(
+                          onPressed: _showMemoDialog,
+                          child: const Text('수정'),
+                        ),
+                        const SizedBox(width: 40),
+                        ElevatedButton(
+                          onPressed: _hideNotice,
+                          child: const Text('숨기기'),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
+              ),
     );
   }
 

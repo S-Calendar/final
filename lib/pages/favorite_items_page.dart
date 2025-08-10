@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../models/notice.dart';
 import '../services/favorite_notice.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -12,16 +13,25 @@ class FavoriteItemsPage extends StatefulWidget {
 
 class _FavoriteItemsPageState extends State<FavoriteItemsPage> {
   List<Notice> favoriteItems = [];
+  String? userUid;
 
   @override
   void initState() {
     super.initState();
+    userUid = FirebaseAuth.instance.currentUser?.uid;
     _loadFavoriteItems();
   }
 
   Future<void> _loadFavoriteItems() async {
-    final favorites = await FavoriteNotices.loadFavorites();
-    debugPrint('불러온 관심 공지: ${favorites.length}개');
+    if (userUid == null) {
+      // 로그인 안 됐으면 빈 리스트 처리
+      if (!mounted) return;
+      setState(() {
+        favoriteItems = [];
+      });
+      return;
+    }
+    final favorites = await FavoriteNotices.loadFavorites(userUid!);
     if (!mounted) return;
     setState(() {
       favoriteItems = favorites;
@@ -29,7 +39,8 @@ class _FavoriteItemsPageState extends State<FavoriteItemsPage> {
   }
 
   Future<void> _removeFromFavorites(Notice notice) async {
-    await FavoriteNotices.removeFavorite(notice);
+    if (userUid == null) return;
+    await FavoriteNotices.removeFavorite(userUid!, notice.id!);
     if (!mounted) return;
     setState(() {
       favoriteItems.remove(notice);
@@ -41,6 +52,13 @@ class _FavoriteItemsPageState extends State<FavoriteItemsPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (userUid == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('관심 공지')),
+        body: const Center(child: Text('로그인이 필요합니다.')),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('관심 공지'),
@@ -57,9 +75,6 @@ class _FavoriteItemsPageState extends State<FavoriteItemsPage> {
                 separatorBuilder: (_, __) => const SizedBox(height: 12),
                 itemBuilder: (context, index) {
                   final notice = favoriteItems[index];
-                  debugPrint(
-                    '✅ UI에 표시할 공지: ${notice.title}, ${notice.startDate}',
-                  );
                   return GestureDetector(
                     onTap: () async {
                       if (notice.url != null && notice.url!.isNotEmpty) {
@@ -79,7 +94,6 @@ class _FavoriteItemsPageState extends State<FavoriteItemsPage> {
                         );
                       }
                     },
-
                     child: Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 16,
@@ -94,45 +108,8 @@ class _FavoriteItemsPageState extends State<FavoriteItemsPage> {
                         children: [
                           Expanded(child: Text(notice.title)),
                           IconButton(
-                            icon: Icon(
-                              notice.isFavorite
-                                  ? Icons.star
-                                  : Icons.star_border,
-                              color:
-                                  notice.isFavorite
-                                      ? Colors.yellow
-                                      : Colors.grey,
-                            ),
-                            onPressed: () async {
-                              try {
-                                if (!notice.isFavorite) {
-                                  await FavoriteNotices.addFavorite(notice);
-                                } else {
-                                  await FavoriteNotices.removeFavorite(notice);
-                                }
-                                setState(() {
-                                  notice.isFavorite = !notice.isFavorite;
-                                  if (!notice.isFavorite) {
-                                    favoriteItems.remove(notice);
-                                  }
-                                });
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      notice.isFavorite
-                                          ? '관심 공지에 추가되었습니다.'
-                                          : '관심 공지에서 제거되었습니다.',
-                                    ),
-                                  ),
-                                );
-                              } catch (e) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('오류가 발생했습니다. 다시 시도해주세요.'),
-                                  ),
-                                );
-                              }
-                            },
+                            icon: const Icon(Icons.star, color: Colors.yellow),
+                            onPressed: () => _removeFromFavorites(notice),
                           ),
                         ],
                       ),

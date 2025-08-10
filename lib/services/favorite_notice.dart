@@ -1,85 +1,67 @@
-// favorite_notice.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/notice.dart';
 
 class FavoriteNotices {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  static CollectionReference<Map<String, dynamic>> get _noticesRef =>
-      _firestore.collection('calendarEvents'); // 로그인 없이 단일 notices 컬렉션만 사용
+  static CollectionReference<Map<String, dynamic>> get _calendarEvents =>
+      _firestore.collection('calendarEvents');
 
-  // 즐겨찾기된 공지들만 불러오기
-  static Future<List<Notice>> loadAllNotices() async {
-    final snapshot = await _noticesRef.get();
+  static CollectionReference<Map<String, dynamic>> get _userFavorites =>
+      _firestore.collection('userFavorites');
 
-    return snapshot.docs.map((doc) {
+  // 유저별 즐겨찾기 공지 목록 불러오기
+  static Future<List<Notice>> loadFavorites(String userUid) async {
+    final favDoc = await _userFavorites.doc(userUid).get();
+    if (!favDoc.exists) return [];
+
+    final favIds = List<String>.from(favDoc.data()?['favorites'] ?? []);
+    if (favIds.isEmpty) return [];
+
+    final querySnapshot =
+        await _calendarEvents
+            .where(FieldPath.documentId, whereIn: favIds)
+            .get();
+
+    return querySnapshot.docs.map((doc) {
       final data = doc.data();
       data['id'] = doc.id;
-      return Notice.fromJson(data);
+      return Notice.fromJson(data, id: doc.id);
     }).toList();
   }
 
-  // isFavorite == true인 공지만 필터링해서 불러오기
-  static Future<List<Notice>> loadFavorites() async {
-    final snapshot =
-        await _noticesRef.where('isFavorite', isEqualTo: true).get();
+  // 유저의 특정 공지가 즐겨찾기인지 확인
+  static Future<bool> isFavorite(String userUid, String eventId) async {
+    final favDoc = await _userFavorites.doc(userUid).get();
+    if (!favDoc.exists) return false;
 
-    return snapshot.docs.map((doc) {
-      final data = doc.data();
-      data['id'] = doc.id;
-      return Notice.fromJson(data);
-    }).toList();
+    final favIds = List<String>.from(favDoc.data()?['favorites'] ?? []);
+    return favIds.contains(eventId);
   }
 
-  // 즐겨찾기 추가 (isFavorite true로 설정)
-  static Future<void> addFavorite(Notice notice) async {
-    final docId = _generateDocId(notice);
-    await _noticesRef.doc(docId).set(
-      {
-        ...notice.toJson(), // 기존 공지 정보
-        'isFavorite': true, // 즐겨찾기 설정
-      },
-      SetOptions(merge: true), // 병합해서 기존 데이터 유지
-    );
-  }
-
-  // 즐겨찾기 제거 (isFavorite false로 설정)
-  static Future<void> removeFavorite(Notice notice) async {
-    final docId = _generateDocId(notice);
-    await _noticesRef.doc(docId).set({
-      'isFavorite': false,
+  // 즐겨찾기 추가
+  static Future<void> addFavorite(String userUid, String eventId) async {
+    final docRef = _userFavorites.doc(userUid);
+    await docRef.set({
+      'favorites': FieldValue.arrayUnion([eventId]),
     }, SetOptions(merge: true));
   }
 
-  static Future<void> toggleFavorite(Notice notice) async {
-    final docId = _generateDocId(notice);
-    final docRef = _noticesRef.doc(docId);
-    final doc = await docRef.get();
+  // 즐겨찾기 제거
+  static Future<void> removeFavorite(String userUid, String eventId) async {
+    final docRef = _userFavorites.doc(userUid);
+    await docRef.set({
+      'favorites': FieldValue.arrayRemove([eventId]),
+    }, SetOptions(merge: true));
+  }
 
-    final current = (doc.data()?['isFavorite'] ?? false) == true;
-
-    if (doc.exists) {
-      await docRef.update({'isFavorite': !current});
+  // 즐겨찾기 토글 (있으면 제거, 없으면 추가)
+  static Future<void> toggleFavorite(String userUid, String eventId) async {
+    final isFav = await isFavorite(userUid, eventId);
+    if (isFav) {
+      await removeFavorite(userUid, eventId);
     } else {
-      await docRef.set({
-        ...notice.toJson(),
-        'isFavorite': !current,
-      }, SetOptions(merge: true));
+      await addFavorite(userUid, eventId);
     }
-  }
-
-  // 현재 공지가 즐겨찾기 상태인지 확인
-  static Future<bool> isFavorite(Notice notice) async {
-    final docId = _generateDocId(notice);
-    final doc = await _noticesRef.doc(docId).get();
-    return (doc.data()?['isFavorite'] ?? false) == true;
-  }
-
-  // 공지를 구별할 고유 문서 ID 생성 (제목+날짜)
-  static String _generateDocId(Notice notice) {
-    final safeTitle =
-        notice.title.replaceAll(RegExp(r'[^\w]+'), '-').toLowerCase();
-    final safeDate = notice.startDate.toIso8601String().replaceAll(':', '');
-    return '${safeTitle}_$safeDate';
   }
 }

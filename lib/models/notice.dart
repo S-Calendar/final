@@ -1,15 +1,15 @@
-// notice.dart
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class Notice {
+  final String id; // Firestore 문서 ID (필수)
   final String title;
   final DateTime startDate;
   final DateTime endDate;
   final Color color;
   final String? url;
   final String? writer;
-  final String category; // 카테고리 필드 추가
+  final String category;
 
   bool isFavorite;
   bool isHidden;
@@ -17,11 +17,12 @@ class Notice {
   bool isPush;
 
   Notice({
+    required this.id,
     required this.title,
     required this.startDate,
     required this.endDate,
     required this.color,
-    required this.category, // 추가
+    required this.category,
     this.url,
     this.writer,
     this.isFavorite = false,
@@ -30,27 +31,22 @@ class Notice {
     this.isPush = false,
   });
 
-  // 신청기간 길이 (띠 우선순위 판단용)
-  int get duration => endDate.difference(startDate).inDays + 1;
-
-  // 날짜 포함 여부
-  bool includes(DateTime date) {
-    return !date.isBefore(startDate) && !date.isAfter(endDate);
-  }
-
+  // Firestore Timestamp 또는 String을 DateTime으로 변환하는 헬퍼
   static DateTime _parseDate(dynamic value) {
     if (value is Timestamp) return value.toDate();
     if (value is String) return DateTime.tryParse(value) ?? DateTime.now();
     return DateTime.now();
   }
 
-  factory Notice.fromJson(Map<String, dynamic> json) {
+  // fromJson에서 id는 필수로 받도록 수정
+  factory Notice.fromJson(Map<String, dynamic> json, {required String id}) {
     return Notice(
+      id: id,
       title: json['title'] ?? '',
       startDate: _parseDate(json['startDate']),
       endDate: _parseDate(json['endDate']),
-      color: Color(json['color']), // int로 저장된 color를 복원
-      category: json['category'] ?? '', // 추가
+      color: Color(json['color'] ?? 0xFF000000),
+      category: json['category'] ?? '',
       url: json['url'],
       writer: json['writer'],
       isFavorite: json['isFavorite'] ?? false,
@@ -60,13 +56,14 @@ class Notice {
     );
   }
 
+  // toJson에는 id를 포함하지 않음 (Firestore 문서 ID로 별도 관리)
   Map<String, dynamic> toJson() {
     return {
       'title': title,
       'startDate': Timestamp.fromDate(startDate),
       'endDate': Timestamp.fromDate(endDate),
-      'color': color.value, // int로 변환
-      'category': category, // 추가
+      'color': color.value,
+      'category': category,
       'url': url,
       'writer': writer,
       'isFavorite': isFavorite,
@@ -77,9 +74,27 @@ class Notice {
   }
 
   @override
-  bool operator ==(Object other) =>
-      other is Notice && title == other.title && startDate == other.startDate;
+  bool operator ==(Object other) => other is Notice && id == other.id;
 
   @override
-  int get hashCode => Object.hash(title, startDate);
+  int get hashCode => id.hashCode;
+}
+
+// 기존 Notice 클래스 끝난 뒤에 추가
+
+extension NoticeExtension on Notice {
+  /// 주어진 날짜가 공지 기간(startDate ~ endDate)에 포함되는지 확인
+  bool includes(DateTime date) {
+    final dateOnly = DateTime(date.year, date.month, date.day);
+    final start = DateTime(startDate.year, startDate.month, startDate.day);
+    final end = DateTime(endDate.year, endDate.month, endDate.day);
+    return dateOnly.isAtSameMomentAs(start) ||
+        dateOnly.isAtSameMomentAs(end) ||
+        (dateOnly.isAfter(start) && dateOnly.isBefore(end));
+  }
+
+  /// 공지 기간 일수 반환 (종료일 - 시작일)
+  int get duration {
+    return endDate.difference(startDate).inDays;
+  }
 }

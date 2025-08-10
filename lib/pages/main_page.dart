@@ -1,5 +1,6 @@
 // main_page.dart
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/custom_calendar.dart';
 import '../models/notice.dart';
 import '../services/notice_data.dart';
@@ -14,72 +15,122 @@ class MainPage extends StatefulWidget {
 
 class _MainPageState extends State<MainPage> {
   final int baseYear = 2024;
-  late PageController _pageController;
-  late int _selectedIndex;
-  late int _todayIndex;
-  late List<Notice> allNotices = [];
-  bool _initializedWithArgs = false;
+  PageController? _pageController; // nullable
+  int? _selectedIndex; // nullable
+  int? _todayIndex; // nullable
+  List<Notice> allNotices = [];
+  bool _initialized = false;
 
   List<String> selectedCategories = ['ai학과공지', '학사공지', '취업공지'];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSelectedCategories();
+  }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
 
-    final args = ModalRoute.of(context)?.settings.arguments as Map<String, int>?;
+    if (!_initialized) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
 
-    final today = DateTime.now();
-    int initYear = today.year;
-    int initMonth = today.month;
+        final args =
+            ModalRoute.of(context)?.settings.arguments as Map<String, int>?;
 
-    if (args != null) {
-      if (args.containsKey('year') && args.containsKey('month')) {
-        initYear = args['year']!;
-        initMonth = args['month']!;
-      }
-    }
+        final today = DateTime.now();
 
-    _todayIndex = (today.year - baseYear) * 12 + (today.month - 1);
-    final newIndex = (initYear - baseYear) * 12 + (initMonth - 1);
+        int initYear = today.year;
+        int initMonth = today.month;
 
-    if (!_initializedWithArgs || _selectedIndex != newIndex) {
-      _selectedIndex = newIndex;
-      _pageController = PageController(initialPage: _selectedIndex);
-      _initializedWithArgs = true;
-      _loadNotices();
+        if (args != null &&
+            args.containsKey('year') &&
+            args.containsKey('month')) {
+          initYear = args['year']!;
+          initMonth = args['month']!;
+        }
+
+        _todayIndex = (today.year - baseYear) * 12 + (today.month - 1);
+        _selectedIndex = (initYear - baseYear) * 12 + (initMonth - 1);
+
+        _pageController = PageController(initialPage: _selectedIndex!);
+
+        await _loadNotices();
+
+        if (mounted) setState(() {});
+      });
+      _initialized = true;
     }
   }
 
+  @override
+  void dispose() {
+    _pageController?.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadNotices() async {
+    if (!mounted) return;
     final notices = await NoticeData.loadNoticesFromFirestore();
-    setState(() {
-      allNotices = notices.where((n) => !n.isHidden).toList();
-    });
+    if (!mounted) return;
+    allNotices = notices.where((n) => !n.isHidden).toList();
+  }
+
+  Future<void> _loadSelectedCategories() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    final savedCategories = prefs.getStringList('selectedCategories');
+    if (savedCategories != null && savedCategories.isNotEmpty) {
+      setState(() {
+        selectedCategories = savedCategories;
+      });
+    }
   }
 
   Future<void> _navigateAndRefresh(String routeName) async {
     await Navigator.pushNamed(context, routeName);
+    if (!mounted) return;
     await _loadNotices();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _saveSelectedCategories() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('selectedCategories', selectedCategories);
   }
 
   void _showCategoryDialog() {
     showDialog(
       context: context,
-      builder: (context) => CategoryFilterDialog(
-        selectedCategories: selectedCategories,
-        onApply: (newCategories) {
-          setState(() {
-            selectedCategories = newCategories;
-          });
-        },
-      ),
+      builder:
+          (context) => CategoryFilterDialog(
+            selectedCategories: selectedCategories,
+            onApply: (newCategories) {
+              setState(() {
+                selectedCategories = newCategories;
+              });
+              _saveSelectedCategories();
+            },
+          ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final int year = baseYear + (_selectedIndex ~/ 12);
-    final int month = (_selectedIndex % 12) + 1;
+    // 초기화 전 null 체크해서 로딩 보여주기
+    if (_selectedIndex == null || _pageController == null) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    final int year = baseYear + (_selectedIndex! ~/ 12);
+    final int month = (_selectedIndex! % 12) + 1;
+
+    final filteredNotices =
+        allNotices
+            .where((n) => selectedCategories.contains(n.category))
+            .toList();
 
     return Scaffold(
       body: SafeArea(
@@ -98,8 +149,8 @@ class _MainPageState extends State<MainPage> {
                   GestureDetector(
                     onTap: () {
                       setState(() {
-                        _selectedIndex = _todayIndex;
-                        _pageController.jumpToPage(_todayIndex);
+                        _selectedIndex = _todayIndex!;
+                        _pageController!.jumpToPage(_todayIndex!);
                       });
                     },
                     child: Image.asset('assets/today_icon.png', width: 70),
@@ -130,7 +181,7 @@ class _MainPageState extends State<MainPage> {
             ),
             Expanded(
               child: PageView.builder(
-                controller: _pageController,
+                controller: _pageController!,
                 onPageChanged: (index) {
                   setState(() {
                     _selectedIndex = index;
@@ -140,10 +191,6 @@ class _MainPageState extends State<MainPage> {
                   final year = baseYear + (index ~/ 12);
                   final month = (index % 12) + 1;
                   final currentMonth = DateTime(year, month);
-
-                  final filteredNotices = allNotices
-                      .where((n) => selectedCategories.contains(n.category))
-                      .toList();
 
                   return CustomCalendar(
                     month: currentMonth,
