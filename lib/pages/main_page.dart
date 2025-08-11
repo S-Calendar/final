@@ -20,6 +20,7 @@ class _MainPageState extends State<MainPage> {
   int? _todayIndex; // nullable
   List<Notice> allNotices = [];
   bool _initialized = false;
+  DateTime? _selectedDateForCalendar;
 
   List<String> selectedCategories = ['ai학과공지', '학사공지', '취업공지'];
 
@@ -148,8 +149,10 @@ class _MainPageState extends State<MainPage> {
                   const SizedBox(width: 4),
                   GestureDetector(
                     onTap: () {
+                      final today = DateTime.now();
                       setState(() {
                         _selectedIndex = _todayIndex!;
+                        _selectedDateForCalendar = today; // ✅ 오늘 날짜 선택
                         _pageController!.jumpToPage(_todayIndex!);
                       });
                     },
@@ -195,6 +198,9 @@ class _MainPageState extends State<MainPage> {
                   return CustomCalendar(
                     month: currentMonth,
                     notices: filteredNotices,
+                    initialSelectedDate: (year == DateTime.now().year && month == DateTime.now().month)
+                      ? _selectedDateForCalendar // ✅ 오늘 버튼 눌렀을 때만 오늘 날짜 테두리
+                      : null,
                   );
                 },
               ),
