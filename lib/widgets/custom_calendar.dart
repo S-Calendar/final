@@ -234,9 +234,9 @@ class _CustomCalendarState extends State<CustomCalendar> {
                                     );
                                   }),
                                   if (dailyNotices.length > 4)
-                                    const Text(
-                                      '+ 더보기',
-                                      style: TextStyle(
+                                    Text(
+                                      '+${dailyNotices.length - 4}',
+                                      style: const TextStyle(
                                         fontSize: 10,
                                         color: Colors.grey,
                                       ),
