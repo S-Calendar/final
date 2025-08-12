@@ -43,7 +43,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget build(BuildContext context) {
     final List<Map<String, dynamic>> settingsItems = [
       {
-        'label': '년간 일정 보기',
+        'label': '연간 일정 보기',
         'onTap': () {
           Navigator.pushNamed(context, '/year_page');
         },
