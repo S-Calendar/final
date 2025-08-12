@@ -47,7 +47,7 @@ class _CategoryFilterDialogState extends State<CategoryFilterDialog> {
     return AlertDialog(
       backgroundColor: Colors.white,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      title: const Text('카테고리 별로 확인하기', style: TextStyle(fontSize: 20)),
+      title: const Text('카테고리 편집', style: TextStyle(fontSize: 20)),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children:
