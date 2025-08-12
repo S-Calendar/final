@@ -61,7 +61,7 @@ class _FavoriteItemsPageState extends State<FavoriteItemsPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('관심 공지'),
+        title: const Text('관심 공지 편집'),
         backgroundColor: Colors.white,
         foregroundColor: Colors.black,
         elevation: 1,
