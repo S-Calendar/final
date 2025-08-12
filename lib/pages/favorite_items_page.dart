@@ -54,7 +54,7 @@ class _FavoriteItemsPageState extends State<FavoriteItemsPage> {
   Widget build(BuildContext context) {
     if (userUid == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('관심 공지')),
+        appBar: AppBar(title: const Text('관심 공지 편집')),
         body: const Center(child: Text('로그인이 필요합니다.')),
       );
     }
