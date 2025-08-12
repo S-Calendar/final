@@ -2,15 +2,18 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/notice.dart';
 
 class FavoriteNotices {
-  static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  static final _firestore = FirebaseFirestore.instance;
+  static final _calendarEvents = _firestore.collection('calendarEvents');
+  static final _userFavorites = _firestore.collection('userFavorites');
 
-  static CollectionReference<Map<String, dynamic>> get _calendarEvents =>
-      _firestore.collection('calendarEvents');
+  static Future<bool> isFavorite(String userUid, String eventId) async {
+    final doc = await _userFavorites.doc(userUid).get();
+    if (!doc.exists) return false;
 
-  static CollectionReference<Map<String, dynamic>> get _userFavorites =>
-      _firestore.collection('userFavorites');
+    final favIds = List<String>.from(doc.data()?['favorites'] ?? []);
+    return favIds.contains(eventId);
+  }
 
-  // 유저별 즐겨찾기 공지 목록 불러오기
   static Future<List<Notice>> loadFavorites(String userUid) async {
     final favDoc = await _userFavorites.doc(userUid).get();
     if (!favDoc.exists) return [];
@@ -18,47 +21,41 @@ class FavoriteNotices {
     final favIds = List<String>.from(favDoc.data()?['favorites'] ?? []);
     if (favIds.isEmpty) return [];
 
-    final querySnapshot =
-        await _calendarEvents
-            .where(FieldPath.documentId, whereIn: favIds)
-            .get();
+    // Firestore whereIn 최대 30개 제한 → 여러 번 병렬 호출
+    final futures = <Future<QuerySnapshot<Map<String, dynamic>>>>[];
+    for (var i = 0; i < favIds.length; i += 30) {
+      final chunk = favIds.skip(i).take(30).toList();
+      futures.add(
+        _calendarEvents.where(FieldPath.documentId, whereIn: chunk).get(),
+      );
+    }
 
-    return querySnapshot.docs.map((doc) {
-      final data = doc.data();
-      data['id'] = doc.id;
-      return Notice.fromJson(data, id: doc.id);
+    final snapshots = await Future.wait(futures);
+    return snapshots.expand((qs) {
+      return qs.docs.map((doc) {
+        final data = doc.data();
+        data['id'] = doc.id;
+        return Notice.fromJson(data, id: doc.id);
+      });
     }).toList();
   }
 
-  // 유저의 특정 공지가 즐겨찾기인지 확인
-  static Future<bool> isFavorite(String userUid, String eventId) async {
-    final favDoc = await _userFavorites.doc(userUid).get();
-    if (!favDoc.exists) return false;
-
-    final favIds = List<String>.from(favDoc.data()?['favorites'] ?? []);
-    return favIds.contains(eventId);
-  }
-
-  // 즐겨찾기 추가
   static Future<void> addFavorite(String userUid, String eventId) async {
-    final docRef = _userFavorites.doc(userUid);
-    await docRef.set({
+    await _userFavorites.doc(userUid).set({
       'favorites': FieldValue.arrayUnion([eventId]),
     }, SetOptions(merge: true));
   }
 
-  // 즐겨찾기 제거
   static Future<void> removeFavorite(String userUid, String eventId) async {
-    final docRef = _userFavorites.doc(userUid);
-    await docRef.set({
+    await _userFavorites.doc(userUid).set({
       'favorites': FieldValue.arrayRemove([eventId]),
     }, SetOptions(merge: true));
   }
 
-  // 즐겨찾기 토글 (있으면 제거, 없으면 추가)
   static Future<void> toggleFavorite(String userUid, String eventId) async {
-    final isFav = await isFavorite(userUid, eventId);
-    if (isFav) {
+    final favDoc = await _userFavorites.doc(userUid).get();
+    final favIds = List<String>.from(favDoc.data()?['favorites'] ?? []);
+    if (favIds.contains(eventId)) {
       await removeFavorite(userUid, eventId);
     } else {
       await addFavorite(userUid, eventId);

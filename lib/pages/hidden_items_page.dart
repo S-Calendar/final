@@ -33,7 +33,7 @@ class _HiddenItemsPageState extends State<HiddenItemsPage> {
   Future<void> _unhideItem(Notice notice) async {
     if (userUid == null) return;
     // Firestore에서 숨김 공지 삭제(복원)
-    await HiddenNotices.remove(userUid!, notice);
+    await HiddenNotices.remove(userUid!, notice.id);
     await _loadHiddenItemsAsync();
     ScaffoldMessenger.of(
       context,

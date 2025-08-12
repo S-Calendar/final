@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:intl/intl.dart';
 import 'package:timezone/timezone.dart' as tz;
+import 'package:timezone/data/latest.dart' as tz_data;
 import 'package:scalendar_app/models/notice.dart';
 import 'package:scalendar_app/services/gemini_service.dart';
 import 'package:scalendar_app/services/web_scraper_service.dart';
@@ -37,11 +38,16 @@ class _SummaryPageState extends State<SummaryPage> {
   @override
   void initState() {
     super.initState();
+
+    // 타임존 데이터 초기화 필수!
+    tz_data.initializeTimeZones();
+
     _userUid = FirebaseAuth.instance.currentUser?.uid;
     _initializeNotification();
     _loadMemo();
     _summarizeFromInitialUrl();
     _loadFavoriteStatus();
+    _loadPushStatus(); // 푸시 상태 초기 로딩
   }
 
   // ===== Notification Initialization =====
@@ -51,6 +57,16 @@ class _SummaryPageState extends State<SummaryPage> {
     );
     const initSettings = InitializationSettings(android: androidSettings);
     await _notificationsPlugin.initialize(initSettings);
+  }
+
+  // ===== 푸시 상태 초기 로딩 =====
+  Future<void> _loadPushStatus() async {
+    if (_userUid == null) return;
+    final pushed = await PushRepository.isPushed(_userUid!, widget.notice);
+    if (!mounted) return;
+    setState(() {
+      widget.notice.isPush = pushed;
+    });
   }
 
   String _fmt(DateTime dt) => DateFormat('yyyy-MM-dd HH:mm').format(dt);
@@ -149,17 +165,26 @@ class _SummaryPageState extends State<SummaryPage> {
       return;
     }
 
+    setState(() {
+      _isLoading = true;
+    });
+
     if (widget.notice.isPush) {
       await _cancelNotification(widget.notice);
       if (!mounted) return;
-      setState(() => widget.notice.isPush = false);
+      setState(() {
+        widget.notice.isPush = false;
+        _isLoading = false;
+      });
     } else {
       await _scheduleNotification(widget.notice);
       if (!mounted) return;
       final pushed = await PushRepository.isPushed(_userUid!, widget.notice);
-      if (pushed) {
-        setState(() => widget.notice.isPush = true);
-      }
+      if (!mounted) return;
+      setState(() {
+        widget.notice.isPush = pushed;
+        _isLoading = false;
+      });
     }
   }
 
@@ -176,6 +201,7 @@ class _SummaryPageState extends State<SummaryPage> {
               .collection('memos')
               .doc(noticeId)
               .get();
+
       if (doc.exists) {
         return doc.data()?['memo'] as String?;
       }
@@ -192,12 +218,17 @@ class _SummaryPageState extends State<SummaryPage> {
     String memo,
   ) async {
     try {
-      await _firestore
+      final docRef = _firestore
           .collection('userMemos')
           .doc(userUid)
           .collection('memos')
-          .doc(noticeId)
-          .set({'memo': memo});
+          .doc(noticeId);
+
+      if (memo.isEmpty) {
+        await docRef.delete();
+      } else {
+        await docRef.set({'memo': memo});
+      }
     } catch (e) {
       print('Firestore 메모 저장 실패: $e');
     }
@@ -206,8 +237,10 @@ class _SummaryPageState extends State<SummaryPage> {
   // ===== Memo Load/Save =====
   Future<void> _loadMemo() async {
     if (_userUid == null) return;
+
     final memo = await _loadMemoFromFirestore(_userUid!, widget.notice.id);
     if (!mounted) return;
+
     setState(() {
       widget.notice.memo = memo ?? '';
     });
@@ -215,8 +248,10 @@ class _SummaryPageState extends State<SummaryPage> {
 
   Future<void> _saveMemo(String memo) async {
     if (_userUid == null) return;
+
     await _saveMemoToFirestore(_userUid!, widget.notice.id, memo);
     if (!mounted) return;
+
     setState(() {
       widget.notice.memo = memo;
     });
@@ -323,7 +358,7 @@ class _SummaryPageState extends State<SummaryPage> {
       ).showSnackBar(const SnackBar(content: Text('로그인이 필요합니다.')));
       return;
     }
-    await HiddenNotices.add(_userUid!, widget.notice);
+    await HiddenNotices.add(_userUid!, widget.notice.id);
     if (!mounted) return;
     ScaffoldMessenger.of(
       context,
@@ -337,7 +372,8 @@ class _SummaryPageState extends State<SummaryPage> {
     final noticeId = widget.notice.id;
     if (userUid == null || noticeId == null) return;
 
-    final isFav = await FavoriteNotices.isFavorite(userUid, noticeId);
+    final isFav = await FavoriteNotices.isFavorite(userUid, widget.notice.id);
+
     if (!mounted) return;
     setState(() {
       _isFavorite = isFav;
@@ -410,10 +446,10 @@ class _SummaryPageState extends State<SummaryPage> {
                   children: [
                     _buildNoticeHeader(),
                     const SizedBox(height: 24),
-                    _buildSummaryItem('참가대상', _summaryResults!["참가대상"]),
-                    _buildSummaryItem('신청기간', _summaryResults!["신청기간"]),
-                    _buildSummaryItem('신청방법', _summaryResults!["신청방법"]),
-                    _buildSummaryItem('내용', _summaryResults!["내용"]),
+                    _buildSummaryItem('참가대상', _summaryResults?["참가대상"]),
+                    _buildSummaryItem('신청기간', _summaryResults?["신청기간"]),
+                    _buildSummaryItem('신청방법', _summaryResults?["신청방법"]),
+                    _buildSummaryItem('내용', _summaryResults?["내용"]),
                     const SizedBox(height: 16),
                     if (widget.notice.url != null)
                       GestureDetector(

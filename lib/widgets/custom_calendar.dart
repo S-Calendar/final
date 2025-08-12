@@ -1,4 +1,3 @@
-// widgets/custom_calendar.dart
 import 'package:flutter/material.dart';
 import '../models/notice.dart';
 import '../widgets/notice_modal.dart';
@@ -10,7 +9,7 @@ class CustomCalendar extends StatefulWidget {
   /// 카테고리 필터 리스트 (빈 리스트면 필터 적용 안함)
   final List<String> filterCategories;
 
-  /// 외부(예: today_icon 클릭)에서 초기 선택 날짜를 지정하고 싶을 때 사용
+  /// 외부에서 초기 선택 날짜 지정용 (optional)
   final DateTime? initialSelectedDate;
 
   const CustomCalendar({
@@ -31,14 +30,12 @@ class _CustomCalendarState extends State<CustomCalendar> {
   @override
   void initState() {
     super.initState();
-    // 외부에서 초기 선택 날짜가 들어오면 반영
     selectedDate = widget.initialSelectedDate;
   }
 
   @override
   void didUpdateWidget(covariant CustomCalendar oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // month(페이지) 변경 시, initialSelectedDate가 현재 month와 같으면 갱신
     if (widget.initialSelectedDate != oldWidget.initialSelectedDate) {
       if (widget.initialSelectedDate != null &&
           widget.initialSelectedDate!.year == widget.month.year &&
@@ -46,6 +43,33 @@ class _CustomCalendarState extends State<CustomCalendar> {
         selectedDate = widget.initialSelectedDate;
       }
     }
+  }
+
+  // 한국 주요 공휴일 (고정일 기준) + 일요일 포함 여부 체크 함수
+  bool isKoreanHoliday(DateTime date) {
+    final fixedHolidays = [
+      DateTime(date.year, 1, 1),   // 신정
+      DateTime(date.year, 3, 1),   // 삼일절
+      DateTime(date.year, 5, 5),   // 어린이날
+      DateTime(date.year, 6, 6),   // 현충일
+      DateTime(date.year, 8, 15),  // 광복절
+      DateTime(date.year, 10, 3),  // 개천절
+      DateTime(date.year, 10, 9),  // 한글날
+      DateTime(date.year, 12, 25), // 성탄절
+    ];
+
+    for (var d in fixedHolidays) {
+      if (d.year == date.year && d.month == date.month && d.day == date.day) {
+        return true;
+      }
+    }
+
+    // 일요일은 공휴일로 간주
+    if (date.weekday == DateTime.sunday) {
+      return true;
+    }
+
+    return false;
   }
 
   @override
@@ -57,10 +81,7 @@ class _CustomCalendarState extends State<CustomCalendar> {
     final int totalCells = daysInMonth + firstWeekday;
     final int numberOfWeeks = (totalCells / 7).ceil();
 
-    // 1) 숨김 공지 제거
     List<Notice> base = widget.notices.where((n) => !n.isHidden).toList();
-
-    // 2) 카테고리 필터 적용 (필요 시)
     final filteredNotices = (widget.filterCategories.isEmpty)
         ? base
         : base.where((n) => widget.filterCategories.contains(n.category)).toList();
@@ -80,13 +101,13 @@ class _CustomCalendarState extends State<CustomCalendar> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: const [
-                Text('일'),
+                Text('일', style: TextStyle(color: Colors.red)),
                 Text('월'),
                 Text('화'),
                 Text('수'),
                 Text('목'),
                 Text('금'),
-                Text('토'),
+                Text('토', style: TextStyle(color: Colors.blue)),
               ],
             ),
             const SizedBox(height: 8),
@@ -109,13 +130,8 @@ class _CustomCalendarState extends State<CustomCalendar> {
                   }
 
                   final int day = index - firstWeekday + 1;
-                  final date = DateTime(
-                    widget.month.year,
-                    widget.month.month,
-                    day,
-                  );
+                  final date = DateTime(widget.month.year, widget.month.month, day);
 
-                  // 날짜에 포함되는 공지 필터링
                   final dailyNotices =
                       filteredNotices.where((n) => n.includes(date)).toList()
                         ..sort((a, b) => a.duration.compareTo(b.duration));
@@ -126,11 +142,24 @@ class _CustomCalendarState extends State<CustomCalendar> {
                       date.month == now.month &&
                       date.day == now.day;
 
-                  final bool isSelected =
-                      selectedDate != null &&
+                  final bool isSelected = selectedDate != null &&
                       date.year == selectedDate!.year &&
                       date.month == selectedDate!.month &&
                       date.day == selectedDate!.day;
+
+                  final bool isSaturday = date.weekday == DateTime.saturday;
+                  final bool holiday = isKoreanHoliday(date);
+
+                  Color textColor;
+                  if (isToday) {
+                    textColor = Colors.white;
+                  } else if (holiday) {
+                    textColor = Colors.red;
+                  } else if (isSaturday) {
+                    textColor = Colors.blue;
+                  } else {
+                    textColor = Colors.black;
+                  }
 
                   return GestureDetector(
                     onTap: () {
@@ -148,13 +177,12 @@ class _CustomCalendarState extends State<CustomCalendar> {
                         ),
                       );
                     },
-                    // ✅ 셀 전체 컨테이너에 테두리를 적용하여 "직사각형" 선택 표시
-                    child: Container(     
+                    child: Container(
                       height: isSelected ? cellHeight + 8 : cellHeight,
                       decoration: isSelected
                           ? BoxDecoration(
                               border: Border.all(
-                                color: const Color.fromARGB(255, 158, 108, 167).withOpacity(0.6), // ✅ 보라색 + 투명도
+                                color: const Color.fromARGB(255, 158, 108, 167).withOpacity(0.6),
                                 width: 2,
                               ),
                               borderRadius: BorderRadius.circular(4),
@@ -163,21 +191,18 @@ class _CustomCalendarState extends State<CustomCalendar> {
                       child: Column(
                         children: [
                           const SizedBox(height: 2),
-                          // 날짜 숫자 원형 배경(오늘은 빨간 원)
                           Container(
                             width: 25,
                             height: 25,
                             alignment: Alignment.center,
                             decoration: BoxDecoration(
-                              color: isToday
-                                  ? Colors.red
-                                  : Colors.transparent, // 오늘 동그라미 배경
+                              color: isToday ? Colors.red : Colors.transparent,
                               shape: BoxShape.circle,
                             ),
                             child: Text(
                               '$day',
                               style: TextStyle(
-                                color: isToday ? Colors.white : Colors.black,
+                                color: isToday ? Colors.white : textColor,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -190,12 +215,8 @@ class _CustomCalendarState extends State<CustomCalendar> {
                                     final Color bgColor = notice.color;
                                     return Container(
                                       height: 14,
-                                      margin: const EdgeInsets.symmetric(
-                                        vertical: 1,
-                                      ),
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 2,
-                                      ),
+                                      margin: const EdgeInsets.symmetric(vertical: 1),
+                                      padding: const EdgeInsets.symmetric(horizontal: 2),
                                       decoration: BoxDecoration(
                                         color: bgColor,
                                         borderRadius: BorderRadius.circular(3),
@@ -213,9 +234,9 @@ class _CustomCalendarState extends State<CustomCalendar> {
                                     );
                                   }),
                                   if (dailyNotices.length > 4)
-                                    Text(
-                                      '+${dailyNotices.length - 4}',
-                                      style: const TextStyle(
+                                    const Text(
+                                      '+ 더보기',
+                                      style: TextStyle(
                                         fontSize: 10,
                                         color: Colors.grey,
                                       ),

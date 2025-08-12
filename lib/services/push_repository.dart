@@ -25,54 +25,59 @@ class PushRepository {
   static CollectionReference<Map<String, dynamic>> get _calendarEvents =>
       _firestore.collection('calendarEvents');
 
-  // 사용자별 푸시 설정 컬렉션
+  // 사용자별 푸시 설정 컬렉션 (userPushes/{userUid}/pushes)
   static CollectionReference<Map<String, dynamic>> _userPushes(
     String userUid,
   ) => _firestore.collection('userPushes').doc(userUid).collection('pushes');
 
-  // 사용자별 푸시 아이템 전체 조회
+  // 사용자별 활성화된 푸시 아이템 전체 조회 (병렬 로딩)
   static Future<List<PushItem>> loadPushItems(String userUid) async {
     final snapshot = await _userPushes(userUid).get();
 
-    List<PushItem> results = [];
+    // enabled == true인 문서만 필터링
+    final enabledDocs =
+        snapshot.docs
+            .where((d) => (d.data()['enabled'] ?? false) == true)
+            .toList();
 
-    for (var doc in snapshot.docs) {
-      final data = doc.data();
+    if (enabledDocs.isEmpty) return [];
 
-      // enabled 가 true 인 것만 처리
-      final enabled = (data['enabled'] ?? false) == true;
-      if (!enabled) continue; // false면 건너뛰기
+    // noticeId 리스트 추출
+    final noticeIds =
+        enabledDocs.map((d) => d.data()['noticeId'] as String).toList();
 
-      final noticeId = data['noticeId'] as String?;
-      if (noticeId == null) continue;
-
-      final noticeDoc = await _calendarEvents.doc(noticeId).get();
-      if (!noticeDoc.exists) continue;
-      final noticeData = noticeDoc.data()!;
-      noticeData['id'] = noticeDoc.id;
-      final notice = Notice.fromJson(noticeData, id: noticeDoc.id);
-
-      final scheduledAt =
-          (data['pushScheduledAt'] as Timestamp?)?.toDate() ?? DateTime.now();
-      final createdAt =
-          (data['pushCreatedAt'] as Timestamp?)?.toDate() ?? DateTime.now();
-      final notificationId = (data['notificationId'] ?? notice.hashCode) as int;
-
-      results.add(
-        PushItem(
-          notice: notice,
-          scheduledAt: scheduledAt,
-          createdAt: createdAt,
-          enabled: enabled,
-          notificationId: notificationId,
-        ),
+    // Firestore whereIn 조건은 최대 30개 제한 -> 30개씩 나누어 병렬 조회
+    final futures = <Future<QuerySnapshot<Map<String, dynamic>>>>[];
+    for (var i = 0; i < noticeIds.length; i += 30) {
+      final chunk = noticeIds.skip(i).take(30).toList();
+      futures.add(
+        _calendarEvents.where(FieldPath.documentId, whereIn: chunk).get(),
       );
     }
 
-    return results;
+    // 병렬로 데이터 조회 후 합치기
+    final snapshots = await Future.wait(futures);
+    final noticeMap = {
+      for (var doc in snapshots.expand((qs) => qs.docs))
+        doc.id: Notice.fromJson(doc.data(), id: doc.id),
+    };
+
+    // PushItem 리스트 생성
+    return enabledDocs.map((doc) {
+      final data = doc.data();
+      final notice = noticeMap[data['noticeId']]!;
+      return PushItem(
+        notice: notice,
+        scheduledAt: (data['pushScheduledAt'] as Timestamp).toDate(),
+        createdAt:
+            (data['pushCreatedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+        enabled: true,
+        notificationId: data['notificationId'] as int,
+      );
+    }).toList();
   }
 
-  // 푸시 등록 또는 업데이트 (개인화)
+  // 푸시 등록 또는 업데이트
   static Future<void> upsertPush({
     required String userUid,
     required Notice notice,
@@ -90,7 +95,7 @@ class PushRepository {
     }, SetOptions(merge: true));
   }
 
-  // 푸시 활성화 상태 변경 (개인화)
+  // 푸시 활성화 상태 변경
   static Future<void> setEnabled(
     String userUid,
     Notice notice,
@@ -102,12 +107,12 @@ class PushRepository {
     ).doc(docId).set({'enabled': enabled}, SetOptions(merge: true));
   }
 
-  // 푸시 제거 (비활성화, 개인화)
+  // 푸시 제거 (비활성화)
   static Future<void> removePush(String userUid, Notice notice) async {
     await setEnabled(userUid, notice, false);
   }
 
-  // 푸시 활성화 여부 확인 (개인화)
+  // 푸시 활성화 여부 확인
   static Future<bool> isPushed(String userUid, Notice notice) async {
     final doc = await _userPushes(userUid).doc(_docId(notice)).get();
     return (doc.data()?['enabled'] ?? false) == true;
